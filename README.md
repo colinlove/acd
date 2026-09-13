@@ -10,7 +10,7 @@ The Rockwell `.ACD` file is an archive file that contains all the files used by 
 
 This library parses those binary databases and exposes the project contents — controller tags, programs, ladder rungs, data types (UDTs), add-on instructions (AOIs), and hardware modules — as Python objects. It can also serialise the parsed project back to an **L5X XML file** that Studio 5000 can import.
 
-> **Compatibility** — Tested against Studio 5000 firmware versions 20–35. Python 3.8+ is supported; Python 3.12+ is recommended.
+> **Compatibility** — Tested against Studio 5000 firmware versions 15–35. Python 3.8+ is supported; Python 3.12+ is recommended.
 
 ---
 
