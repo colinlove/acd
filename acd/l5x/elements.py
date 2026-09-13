@@ -84,6 +84,26 @@ def _get_program_records(cur: Cursor, collection_id: int) -> List[Tuple[str, int
     return cur.fetchall()
 
 
+def _get_aoi_records(cur: Cursor, controller_id: int) -> List[Tuple[str, int, int, int]]:
+    cur.execute(
+        "SELECT comp_name, object_id, parent_id, record_type FROM comps "
+        "WHERE parent_id=? AND comp_name='RxUDIDefinitionCollection'",
+        (controller_id,),
+    )
+    results = cur.fetchall()
+    if len(results) > 1:
+        raise Exception("Contains more than one AOI collection")
+    if not results:
+        # Add-On Instructions were introduced in v16, so older projects have no AOI collection.
+        return []
+    cur.execute(
+        "SELECT comp_name, object_id, parent_id, record_type FROM comps "
+        "WHERE parent_id=? AND record_type=256",
+        (results[0][1],),
+    )
+    return cur.fetchall()
+
+
 def _required_program_collection(
     cur: Cursor,
     program_name: str,
@@ -2990,21 +3010,7 @@ class ControllerBuilder(L5xElementBuilder):
                 tasks.append(TaskBuilder(self._cur, task_result[1]).build(comment_id_to_program))
 
         # Get the AOI Collection and get the AOIs
-        self._cur.execute(
-            "SELECT comp_name, object_id, parent_id, record_type FROM comps WHERE parent_id="
-            + str(self._object_id)
-            + " AND comp_name='RxUDIDefinitionCollection'"
-        )
-        results = self._cur.fetchall()
-        if len(results) > 1:
-            raise Exception("Contains more than one AOI collection")
-        _aoi_collection_object_id = results[0][1]
-        self._cur.execute(
-            "SELECT comp_name, object_id, parent_id, record_type FROM comps WHERE parent_id="
-            + str(_aoi_collection_object_id)
-            + " AND record_type=256"
-        )
-        results = self._cur.fetchall()
+        results = _get_aoi_records(self._cur, self._object_id)
         aois: List[AOI] = []
         for result in results:
             _aoi_object_id = result[1]

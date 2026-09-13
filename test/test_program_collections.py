@@ -2,7 +2,7 @@ import sqlite3
 
 import pytest
 
-from acd.l5x.elements import _get_program_records, _required_program_collection
+from acd.l5x.elements import _get_aoi_records, _get_program_records, _required_program_collection
 
 
 def _comps_cursor():
@@ -44,5 +44,35 @@ def test_required_program_collection_reports_program_context(collection_name):
             ),
         ):
             _required_program_collection(cursor, "Program", 10, 256, collection_name)
+    finally:
+        connection.close()
+
+
+def test_aoi_records_empty_without_aoi_collection():
+    connection, cursor = _comps_cursor()
+    try:
+        cursor.execute(
+            "INSERT INTO comps VALUES (?, ?, ?, ?, ?, ?)",
+            (2, 1, "RxProgramCollection", 0, 0, b"programs"),
+        )
+
+        assert _get_aoi_records(cursor, 1) == []
+    finally:
+        connection.close()
+
+
+def test_aoi_records_returns_aois_in_collection():
+    connection, cursor = _comps_cursor()
+    try:
+        cursor.executemany(
+            "INSERT INTO comps VALUES (?, ?, ?, ?, ?, ?)",
+            [
+                (3, 1, "RxUDIDefinitionCollection", 0, 0, b"aois"),
+                (30, 3, "MyAOI", 0, 256, b"aoi"),
+                (31, 3, "Metadata", 1, 512, b"metadata"),
+            ],
+        )
+
+        assert _get_aoi_records(cursor, 1) == [("MyAOI", 30, 3, 256)]
     finally:
         connection.close()
