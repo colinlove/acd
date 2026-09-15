@@ -35,18 +35,32 @@ CATALOG_NUMBERS: Dict[Tuple[int, int, int], str] = {
     (1, 12, 258): "1756-EN4TR",
     (1, 12, 261): "1794-AENTR",
     (1, 12, 322): "5094-AEN2TR/A",
+    (1, 14, 54): "1756-L61",
     (1, 14, 72): "1769-L33ERM",
+    (1, 14, 89): "1769-L23E-QBFC1",
     (1, 14, 93): "1756-L72",
     (1, 14, 94): "1756-L73",
-    (1, 14, 108): "1769-L36ERM",           # confirmed from two paired ACD/L5X files
-    (1, 14, 110): "1769-L33ERM",           # confirmed from paired ACD/L5X file (HMPS10646)
+    (1, 14, 108): "1769-L36ERM",           # confirmed from paired ACD/L5X files
+    (1, 14, 110): "1769-L33ERM",           # confirmed from paired ACD/L5X file
+    (1, 14, 149): "1769-L24ER-QB1B",
+    (1, 14, 151): "1769-L27ERM-QBFC1B",
+    (1, 14, 152): "1769-L19ER-BB1B",
     (1, 14, 155): "1769-L18ERM-BB1B",
-    (1, 14, 156): "1769-L30ERM",           # confirmed from three paired ACD/L5X files
+    (1, 14, 156): "1769-L30ERM",           # confirmed from paired ACD/L5X files
     (1, 14, 164): "1756-L81E",
     (1, 14, 165): "1756-L82E",
     (1, 14, 166): "1756-L83E",
     (1, 14, 167): "1756-L84E",
     (1, 14, 168): "1756-L85E",
+    (1, 14, 192): "5069-L320ERRM",         # Compact 5000
+    (1, 14, 193): "5069-L330ERM",          # Compact 5000
+    (1, 14, 195): "5069-L350ERM",          # Compact 5000
+    (1, 14, 196): "5069-L306ER",           # Compact 5000
+    (1, 14, 221): "5069-L310ERMS2",        # GuardLogix SIL2/PLd
+    (1, 14, 222): "5069-L320ERMS2",        # GuardLogix SIL2/PLd
+    (1, 14, 223): "5069-L330ERMS2",        # GuardLogix SIL2/PLd
+    (1, 14, 235): "5069-L306ERS2",         # GuardLogix SIL2/PLd
+    (1, 14, 236): "5069-L310ERS2",         # GuardLogix SIL2/PLd
     (1, 109, 6): "1794-IP4/B",
     (1, 115, 323): "5094-IF8IH/A",
     (1, 115, 324): "5094-OF8IH/A",
