@@ -23,6 +23,7 @@ CATALOG_NUMBERS: Dict[Tuple[int, int, int], str] = {
     (1, 7, 156): "1794-IB32/A",
     (1, 7, 397): "5094-IB16/A",
     (1, 7, 399): "5094-OB16/A",
+    (1, 7, 1140): "Embedded",              # embedded discrete I/O on the 1769-L18ERM-BB1B
     (1, 10, 7): "1756-IF8/A",
     (1, 10, 25): "1794-IE8/B",
     (1, 10, 26): "1794-OE4/B",
@@ -37,6 +38,10 @@ CATALOG_NUMBERS: Dict[Tuple[int, int, int], str] = {
     (1, 14, 72): "1769-L33ERM",
     (1, 14, 93): "1756-L72",
     (1, 14, 94): "1756-L73",
+    (1, 14, 108): "1769-L36ERM",           # confirmed from two paired ACD/L5X files
+    (1, 14, 110): "1769-L33ERM",           # confirmed from paired ACD/L5X file (HMPS10646)
+    (1, 14, 155): "1769-L18ERM-BB1B",
+    (1, 14, 156): "1769-L30ERM",           # confirmed from three paired ACD/L5X files
     (1, 14, 164): "1756-L81E",
     (1, 14, 165): "1756-L82E",
     (1, 14, 166): "1756-L83E",
