@@ -35,16 +35,24 @@ CATALOG_NUMBERS: Dict[Tuple[int, int, int], str] = {
     (1, 12, 258): "1756-EN4TR",
     (1, 12, 261): "1794-AENTR",
     (1, 12, 322): "5094-AEN2TR/A",
+    (1, 14, 15): "1789-L60",               # SoftLogix 5860
+    (1, 14, 52): "DriveLogix5730",
     (1, 14, 54): "1756-L61",
+    (1, 14, 56): "1756-L63",
+    (1, 14, 65): "1769-L35E",
     (1, 14, 72): "1769-L33ERM",
+    (1, 14, 87): "1769-L23-QB1",
     (1, 14, 89): "1769-L23E-QBFC1",
     (1, 14, 93): "1756-L72",
     (1, 14, 94): "1756-L73",
+    (1, 14, 107): "1769-L33ER",
     (1, 14, 108): "1769-L36ERM",           # confirmed from paired ACD/L5X files
     (1, 14, 110): "1769-L33ERM",           # confirmed from paired ACD/L5X file
     (1, 14, 149): "1769-L24ER-QB1B",
+    (1, 14, 150): "1769-L24ER-QFC1B",
     (1, 14, 151): "1769-L27ERM-QBFC1B",
     (1, 14, 152): "1769-L19ER-BB1B",
+    (1, 14, 154): "1769-L18ER-BB1B",
     (1, 14, 155): "1769-L18ERM-BB1B",
     (1, 14, 156): "1769-L30ERM",           # confirmed from paired ACD/L5X files
     (1, 14, 164): "1756-L81E",
@@ -52,8 +60,10 @@ CATALOG_NUMBERS: Dict[Tuple[int, int, int], str] = {
     (1, 14, 166): "1756-L83E",
     (1, 14, 167): "1756-L84E",
     (1, 14, 168): "1756-L85E",
+    (1, 14, 178): "1769-L36ERMS",          # CompactGuardLogix
     (1, 14, 192): "5069-L320ERRM",         # Compact 5000
     (1, 14, 193): "5069-L330ERM",          # Compact 5000
+    (1, 14, 194): "5069-L340ERM",          # Compact 5000
     (1, 14, 195): "5069-L350ERM",          # Compact 5000
     (1, 14, 196): "5069-L306ER",           # Compact 5000
     (1, 14, 221): "5069-L310ERMS2",        # GuardLogix SIL2/PLd
