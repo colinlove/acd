@@ -145,6 +145,7 @@ setup(
     install_requires=[
         "loguru",
         "kaitaistruct",
+        "olefile",
     ],
     extras_require={
         "dev": [

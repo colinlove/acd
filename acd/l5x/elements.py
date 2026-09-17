@@ -1,4 +1,5 @@
 import html
+import io
 import os
 import re
 import shutil
@@ -1005,6 +1006,218 @@ class Task(L5xElement):
     scheduled_programs: List[ScheduledProgram]
 
 
+_VALID_PEN_NAME_CHARS = frozenset(
+    'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz'
+    '0123456789_.[]:')
+
+
+@dataclass
+class Pen:
+    name: str
+    color: str
+    visible: str
+    style: str
+    pen_type: str
+    width: str
+    marker: str
+    min: str
+    max: str
+
+    def to_xml(self) -> str:
+        return (
+            f'<Pen Name="{self.name}" Color="{self.color}"'
+            f' Visible="{self.visible}" Style="{self.style}"'
+            f' Type="{self.pen_type}" Width="{self.width}"'
+            f' Marker="{self.marker}" Min="{self.min}" Max="{self.max}"/>'
+        )
+
+
+@dataclass
+class Trend:
+    name: str
+    sample_period: str
+    number_of_captures: str
+    capture_size_type: str
+    capture_size: str
+    start_trigger_type: str
+    stop_trigger_type: str
+    trendx_version: str
+    template: str
+    pens: List['Pen']
+
+    def to_xml(self) -> str:
+        pens_xml = ''.join(p.to_xml() for p in self.pens)
+        return (
+            f'<Trend Name="{self.name}"'
+            f' SamplePeriod="{self.sample_period}"'
+            f' NumberOfCaptures="{self.number_of_captures}"'
+            f' CaptureSizeType="{self.capture_size_type}"'
+            f' CaptureSize="{self.capture_size}"'
+            f' StartTriggerType="{self.start_trigger_type}"'
+            f' StopTriggerType="{self.stop_trigger_type}"'
+            f' TrendxVersion="{self.trendx_version}">'
+            f'<Template>{self.template}</Template>'
+            f'<Pens>{pens_xml}</Pens>'
+            f'</Trend>'
+        )
+
+
+def _parse_trend_blob(blob: bytes, trend_name: str) -> Union['Trend', None]:
+    """Parse a Trend BLOB from the comps table and return a Trend instance.
+
+    All pre-CFB header fields are read relative to `cfb_offset`, not as
+    absolute blob offsets -- the pre-CFB header's total length varies per
+    trend, but the fields we need sit at a fixed distance *before* the CFB
+    start. Likewise, the intra-stream (Contents) fields are computed
+    relative to the end of the last pen name, since their absolute position
+    shifts with the number of pens and the lengths of the pen name strings.
+    These offsets were derived empirically from 3 known trends (7, 8 and 5
+    pens) across 2 ACD files and are not from documented format specs.
+    """
+    OLE_MAGIC = bytes([0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1])
+    cfb_offset = blob.find(OLE_MAGIC)
+    if cfb_offset < 0:
+        return None
+
+    num_pens = struct.unpack_from('<I', blob, cfb_offset - 8844)[0]
+    num_captures = struct.unpack_from('<I', blob, cfb_offset - 8889)[0]
+    sample_period_s = struct.unpack_from('<I', blob, cfb_offset - 8832)[0] // 1000
+    # Not confirmed to hold in every case: matched exactly for 2 of 3 known
+    # trends; the third (7-pen, 2s sample period) trend's L5X value was
+    # exactly half of this raw field, for reasons not yet understood.
+    capture_size = struct.unpack_from('<I', blob, cfb_offset - 560)[0]
+
+    try:
+        import olefile as _ole
+        ole = _ole.OleFileIO(io.BytesIO(blob[cfb_offset:]))
+        C = ole.openstream('Contents').read()
+        ole.close()
+    except Exception:
+        return None
+
+    # TrendxVersion is not found encoded anywhere in the Contents stream for
+    # 2 of 3 known trends (the one prior "hit" was a coincidental byte match
+    # inside an unrelated pen-name string). All known trends show "5.2", so
+    # this is treated as a fixed constant of the TrendX control version
+    # rather than something parsed from the blob.
+    trendx_ver = '5.2'
+
+    # Compute exact OLE file size from the FAT so the template doesn't include
+    # trailing blob data that follows the CFB record.
+    _cfb = blob[cfb_offset:]
+    _ss = 1 << struct.unpack_from('<H', _cfb, 30)[0]   # sector size (512)
+    _fat_sec = struct.unpack_from('<I', _cfb, 76)[0]   # FAT sector location (DIFAT[0])
+    _fat_off = 512 + _fat_sec * _ss
+    _FREESECT = 0xFFFFFFFF
+    _last = -1
+    for _i in range(_ss // 4):
+        if struct.unpack_from('<I', _cfb, _fat_off + _i * 4)[0] != _FREESECT:
+            _last = _i
+    _cfb_size = 512 + (_last + 1) * _ss
+    template = ' '.join(str(b) for b in blob[cfb_offset:cfb_offset + _cfb_size])
+
+    def _scan_names(start: int, stop_count: int, limit: int):
+        """Scan for up to stop_count MFC UTF-16LE strings (ff fe ff <len> ...)
+        made only of PLC-tag-compatible characters, starting at `start`."""
+        found = []
+        pos = start
+        while pos < limit and len(found) < stop_count:
+            if C[pos:pos + 3] == b'\xff\xfe\xff':
+                length = C[pos + 3]
+                end = pos + 4 + length * 2
+                if length >= 2 and end <= len(C):
+                    try:
+                        s = C[pos + 4:end].decode('utf-16-le')
+                        if all(c in _VALID_PEN_NAME_CHARS for c in s):
+                            found.append((pos + 4, end, s))
+                            pos = end
+                            continue
+                    except UnicodeDecodeError:
+                        pass
+            pos += 1
+        return found
+
+    limit = min(2000, len(C) - 4)
+    # The very first valid string in Contents is the trend's own name, not a
+    # pen -- skip it before collecting the actual per-pen name records.
+    trend_name_hit = _scan_names(0, 1, limit)
+    scan_start = trend_name_hit[0][1] if trend_name_hit else 0
+    pen_name_hits = _scan_names(scan_start, num_pens, limit)
+
+    pen_names: List[str] = []
+    pen_mins: List[float] = []
+    pen_maxs: List[float] = []
+    for name_idx, _end, s in pen_name_hits:
+        if name_idx < 50:
+            continue
+        # The preceding-string type (1-char space vs empty) shifts Min/Max
+        # offsets by 2 bytes; detected via the byte at name_idx-38
+        # (0x20=space -> pens 3+, else empty string -> pens 1-2).
+        if C[name_idx - 38] == 0x20:
+            min_f = struct.unpack_from('<f', C, name_idx - 50)[0]
+            max_f = struct.unpack_from('<f', C, name_idx - 46)[0]
+        else:
+            min_f = struct.unpack_from('<f', C, name_idx - 48)[0]
+            max_f = struct.unpack_from('<f', C, name_idx - 44)[0]
+        pen_names.append(s)
+        pen_mins.append(min_f)
+        pen_maxs.append(max_f)
+
+    if pen_name_hits:
+        last_name_end = pen_name_hits[-1][1]
+    else:
+        last_name_end = scan_start
+
+    # Colors: num_pens ABGR DWORDs starting 78 bytes after the last pen name
+    # ends; convert to ARGB for L5X format.
+    colors = []
+    color_start = last_name_end + 78
+    for i in range(num_pens):
+        d = struct.unpack_from('<I', C, color_start + i * 4)[0]
+        aa = d & 0xFF
+        bb = (d >> 8) & 0xFF
+        gg = (d >> 16) & 0xFF
+        rr = (d >> 24) & 0xFF
+        argb = (aa << 24) | (rr << 16) | (gg << 8) | bb
+        h = f'{argb:08x}'
+        colors.append(f'16#{h[:4]}_{h[4:]}')
+
+    # Visible: num_pens DWORDs (0=false, 1=true) at a position that scales
+    # linearly with num_pens relative to the last pen name's end.
+    visibles = []
+    visible_start = last_name_end + 137 + 12 * num_pens
+    for i in range(num_pens):
+        v = struct.unpack_from('<I', C, visible_start + i * 4)[0]
+        visibles.append('true' if v else 'false')
+
+    pens = []
+    for i in range(min(len(pen_names), num_pens)):
+        pens.append(Pen(
+            name=pen_names[i],
+            color=colors[i] if i < len(colors) else '16#0000_0000',
+            visible=visibles[i] if i < len(visibles) else 'false',
+            style='0',
+            pen_type='Analog',
+            width='1',
+            marker='0',
+            min=f'{pen_mins[i]:.1f}',
+            max=f'{pen_maxs[i]:.1f}',
+        ))
+
+    return Trend(
+        name=trend_name,
+        sample_period=str(sample_period_s),
+        number_of_captures=str(num_captures),
+        capture_size_type='Samples',
+        capture_size=str(capture_size),
+        start_trigger_type='No Trigger',
+        stop_trigger_type='No Trigger',
+        trendx_version=trendx_ver,
+        template=template,
+        pens=pens,
+    )
+
+
 @dataclass
 class Controller(L5xElement):
     use: str
@@ -1035,6 +1248,7 @@ class Controller(L5xElement):
     programs: List[Program]
     tasks: List[Task]
     aois: List[AOI]
+    trends: List[Trend]
     # _redundancy_enabled is NOT serialised as a regular XML attribute (underscore prefix
     # skips it in the base to_xml()); it is used only to build the <RedundancyInfo> element.
     _redundancy_enabled: bool = field(default=False)
@@ -1081,7 +1295,7 @@ class Controller(L5xElement):
             self._section_xml("tasks", "Tasks"),
             '<CST MasterID="0"/>',
             '<WallClockTime LocalTimeAdjustment="0" TimeZone="0"/>',
-            '<Trends/>',
+            self._section_xml("trends", "Trends"),
             '<DataLogs/>',
             '<TimeSynchronize Priority1="128" Priority2="128" PTPEnable="true"/>',
             self._ethernet_ports_xml(),
@@ -3125,6 +3339,26 @@ class ControllerBuilder(L5xElementBuilder):
             if _ctrl_slot is not None:
                 comm_path = _comm_path_prefix + str(_ctrl_slot)
 
+        # Get the Trend Collection and build Trend objects
+        trends: List[Trend] = []
+        self._cur.execute(
+            "SELECT object_id FROM comps WHERE parent_id="
+            + str(self._object_id)
+            + " AND comp_name='RxTrendCollection'"
+        )
+        trend_coll_row = self._cur.fetchone()
+        if trend_coll_row is not None:
+            _trend_coll_oid = trend_coll_row[0]
+            self._cur.execute(
+                "SELECT comp_name, record FROM comps WHERE parent_id="
+                + str(_trend_coll_oid)
+                + " AND record_type=256 ORDER BY seq_number"
+            )
+            for _trend_name, _trend_record in self._cur.fetchall():
+                t = _parse_trend_blob(bytes(_trend_record), _trend_name)
+                if t is not None:
+                    trends.append(t)
+
         return Controller(
             controller_name,
             "Target",
@@ -3155,6 +3389,7 @@ class ControllerBuilder(L5xElementBuilder):
             programs,
             tasks,
             aois,
+            trends,
             redundancy_enabled,
         )
 
