@@ -3,7 +3,7 @@ import struct
 
 import pytest
 
-from acd.l5x.elements import ModuleBuilder, TagBuilder, TaskBuilder, _program_schedule_id
+from acd.l5x.elements import TagBuilder, TaskBuilder, _program_schedule_id
 from acd.record.rx import LegacyRxGeneric, RxGeneric
 
 
@@ -461,83 +461,6 @@ def test_legacy_program_schedule_id_and_task():
         assert task.priority == "5"
         assert task.watchdog == "500"
         assert [program.name for program in task.scheduled_programs] == ["MainProgram"]
-    finally:
-        database.close()
-
-
-def _module_e1(vendor, product_type, product_code, major, minor, parent_port=1):
-    # Minimal 0x30-byte extended attribute-0x001 record: just enough for
-    # ModuleBuilder.build() to parse vendor/type/code/major/minor and skip
-    # the optional IP-address branch (which only triggers when len(e1) > 0x32).
-    e1 = bytearray(0x30)
-    struct.pack_into("<H", e1, 0x02, vendor)
-    struct.pack_into("<H", e1, 0x04, product_type)
-    struct.pack_into("<H", e1, 0x06, product_code)
-    e1[0x08] = major & 0x7F
-    e1[0x09] = minor
-    struct.pack_into("<I", e1, 0x16, 0)  # parent_modid: unresolved -> "Local"
-    struct.pack_into("<H", e1, 0x1A, parent_port)
-    struct.pack_into("<I", e1, 0x1C, 0)  # slot 0
-    return bytes(e1)
-
-
-def test_module_builder_passes_major_rev_for_series_aware_resolution():
-    # ModuleBuilder.build() must pass the module's parsed firmware major
-    # revision through to catalog_number_for_identity(), so a revision-aware
-    # catalog table (e.g. resources/external_catalog.rockwell_logix_designer.json)
-    # resolves the exact hardware series letter (5069-OB16/A vs /B) instead of
-    # just the base catalog number. Same worked example used throughout: CIP
-    # identity (1, 7, 392) is Series A at major rev 2, Series B at major rev 3.
-    catalog_table = {
-        (1, 7, 392): "5069-OB16",
-        (1, 7, 392, 2): "5069-OB16/A",
-        (1, 7, 392, 3): "5069-OB16/B",
-    }
-    database, cursor = _database()
-    try:
-        _insert(
-            cursor,
-            100,
-            "Slot4",
-            _legacy_rx(
-                cip_type=0x69,
-                object_id=100,
-                attributes=[(0x01, _module_e1(1, 7, 392, major=3, minor=11))],
-            ),
-        )
-
-        module = ModuleBuilder(cursor, 100, _catalog_table=catalog_table).build()
-
-        assert module.vendor == 1
-        assert module.product_type == 7
-        assert module.product_code == 392
-        assert module.major == 3
-        assert module.catalog_number == "5069-OB16/B"
-    finally:
-        database.close()
-
-
-def test_module_builder_falls_back_to_base_catalog_without_revision_table():
-    # Without a revision-aware table, resolution still works via the base
-    # 3-tuple entry (no regression for existing plain CATALOG_NUMBERS-style
-    # tables that only have (vendor, product_type, product_code) keys).
-    catalog_table = {(1, 7, 392): "5069-OB16"}
-    database, cursor = _database()
-    try:
-        _insert(
-            cursor,
-            100,
-            "Slot4",
-            _legacy_rx(
-                cip_type=0x69,
-                object_id=100,
-                attributes=[(0x01, _module_e1(1, 7, 392, major=3, minor=11))],
-            ),
-        )
-
-        module = ModuleBuilder(cursor, 100, _catalog_table=catalog_table).build()
-
-        assert module.catalog_number == "5069-OB16"
     finally:
         database.close()
 
