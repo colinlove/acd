@@ -57,17 +57,20 @@ CATALOG_NUMBERS: Dict[Tuple[int, int, int], str] = {
 }
 
 
-def _identity_key_from_any(raw: object) -> Optional[Tuple[int, int, int]]:
-    """Coerce a catalog key into an (int, int, int) identity, or None.
+def _identity_key_from_any(raw: object) -> Optional[Tuple[int, ...]]:
+    """Coerce a catalog key into an identity tuple, or None.
 
-    Accepts the two natural JSON shapes: a 3-element array/tuple
-    ``[vendor, product_type, product_code]`` or an object
-    ``{"vendor": v, "product_type": t, "product_code": c}``. Returns None
-    when the shape is unrecognised so the caller can raise a clear error.
+    Accepts the two natural JSON shapes: a 3- or 4-element array/tuple
+    ``[vendor, product_type, product_code]`` or
+    ``[vendor, product_type, product_code, major_rev]``, or an object
+    ``{"vendor": v, "product_type": t, "product_code": c}`` (the object form
+    has no major_rev spelling; use the array or colon-string form for a
+    revision-specific entry). Returns None when the shape is unrecognised so
+    the caller can raise a clear error.
     """
-    if isinstance(raw, (list, tuple)) and len(raw) == 3:
+    if isinstance(raw, (list, tuple)) and len(raw) in (3, 4):
         try:
-            return (int(raw[0]), int(raw[1]), int(raw[2]))
+            return tuple(int(x) for x in raw)
         except (TypeError, ValueError):
             return None
     if isinstance(raw, dict):
@@ -82,21 +85,31 @@ def _identity_key_from_any(raw: object) -> Optional[Tuple[int, int, int]]:
     return None
 
 
-def load_external_catalog(path: str) -> Dict[Tuple[int, int, int], str]:
+def load_external_catalog(path: str) -> Dict[Tuple[int, ...], str]:
     """Load and validate a JSON catalog of CIP identity → catalog number.
 
-    The file is a mapping from an identity triple to a catalog-number string.
+    The file is a mapping from an identity key to a catalog-number string.
     Two key shapes are accepted (per entry, or as a single wrapper):
       * array:  ``{"1:12:166": "1756-EN2T"}`` or ``{"entries": {"1:12:166": ...}}``
       * object: ``{"1:12:166": "1756-EN2T"}`` where the key is
                 ``"vendor:product_type:product_code"`` (e.g. ``"1:12:166"``)
 
-    The colon-joined string form is chosen deliberately: identity triples are
-    stable, sortable, and unambiguous when written as ``v:t:c``. Every value
-    must be a non-empty string; every key must parse as three non-negative
-    integers. The result is a plain dict keyed by the (v, t, c) tuple, ready
-    to be passed to ``catalog_number_for_identity(table=...)`` or merged over
-    ``CATALOG_NUMBERS``.
+    A key may carry a 4th component, the module's firmware major revision
+    (``"vendor:product_type:product_code:major_rev"``, e.g. ``"1:7:392:3"``),
+    for identities where the (vendor, product_type, product_code) triple
+    alone is ambiguous -- Rockwell does not allocate a new product code for a
+    new hardware "series" (``/A``, ``/B``, ...); it ties the series letter to
+    a firmware-major-revision breakpoint instead, which differs per catalog
+    family. A 4-tuple entry resolves only when the caller passes a matching
+    ``major_rev=`` to :func:`catalog_number_for_identity`; the plain 3-tuple
+    entry remains the fallback when the major revision is not known.
+
+    The colon-joined string form is chosen deliberately: identity keys are
+    stable, sortable, and unambiguous when written this way. Every value
+    must be a non-empty string; every key must parse as three or four
+    non-negative integers. The result is a plain dict keyed by the identity
+    tuple, ready to be passed to ``catalog_number_for_identity(table=...)``
+    or merged over ``CATALOG_NUMBERS``.
 
     This is the extension point for a shared, richer catalog (Rockwell's own
     data, or the module templates aei-logix5000 extracts) so that adding a
@@ -110,7 +123,7 @@ def load_external_catalog(path: str) -> Dict[Tuple[int, int, int], str]:
     if "entries" in data and isinstance(data.get("entries"), dict):
         data = data["entries"]
 
-    out: Dict[Tuple[int, int, int], str] = {}
+    out: Dict[Tuple[int, ...], str] = {}
     for key, value in data.items():
         # Allow "_"-prefixed metadata keys (e.g. "_comment") for documentation
         # inside the JSON; they are skipped, not validated, so a file can carry
@@ -119,7 +132,7 @@ def load_external_catalog(path: str) -> Dict[Tuple[int, int, int], str]:
             continue
         identity = _identity_key_from_any(key)
         if identity is None:
-            # Try the "v:t:c" string form.
+            # Try the "v:t:c" / "v:t:c:major" string form.
             identity = _parse_colon_key(key)
         if identity is None:
             raise CatalogError(
@@ -130,35 +143,37 @@ def load_external_catalog(path: str) -> Dict[Tuple[int, int, int], str]:
                 f"catalog value for identity {identity} must be a non-empty "
                 f"string in {path}"
             )
-        v, t, c = identity
-        if v < 0 or t < 0 or c < 0:
+        if any(component < 0 for component in identity):
             raise CatalogError(f"identity {identity} has a negative component in {path}")
         out[identity] = value.strip()
     return out
 
 
-def _parse_colon_key(key: object) -> Optional[Tuple[int, int, int]]:
-    """Parse a ``"vendor:product_type:product_code"`` string key."""
+def _parse_colon_key(key: object) -> Optional[Tuple[int, ...]]:
+    """Parse a ``"vendor:product_type:product_code[:major_rev]"`` string key."""
     if not isinstance(key, str):
         return None
     parts = key.split(":")
-    if len(parts) != 3:
+    if len(parts) not in (3, 4):
         return None
     try:
-        return (int(parts[0]), int(parts[1]), int(parts[2]))
+        return tuple(int(p) for p in parts)
     except ValueError:
         return None
 
 
 def merge_catalog(
-    base: Optional[Dict[Tuple[int, int, int], str]] = None,
-    overrides: Optional[Dict[Tuple[int, int, int], str]] = None,
-) -> Dict[Tuple[int, int, int], str]:
+    base: Optional[Dict[Tuple[int, ...], str]] = None,
+    overrides: Optional[Dict[Tuple[int, ...], str]] = None,
+) -> Dict[Tuple[int, ...], str]:
     """Return a new table = ``base`` with ``overrides`` applied on top.
 
     ``base`` defaults to the built-in ``CATALOG_NUMBERS``. ``overrides``
     (typically from ``load_external_catalog``) win on any conflicting
-    identity. Neither input is mutated.
+    identity. Neither input is mutated. ``base``/``overrides`` may freely mix
+    3-tuple (vendor, product_type, product_code) and 4-tuple
+    (..., major_rev) keys in the same dict -- they are different keys, so a
+    revision-specific override never clobbers the plain triple.
     """
     base = CATALOG_NUMBERS if base is None else base
     if not overrides:
@@ -193,13 +208,27 @@ def _fallback_catalog_number(identity: Tuple[int, int, int]) -> str:
 
 def catalog_number_for_identity(
     identity: Tuple[int, int, int],
-    table: Optional[Dict[Tuple[int, int, int], str]] = None,
+    table: Optional[Dict[Tuple[int, ...], str]] = None,
+    major_rev: Optional[int] = None,
 ) -> str:
     """Resolve the CatalogNumber string for a CIP identity triple.
 
     Resolution order:
-      1. the ``table`` (default: the built-in ``CATALOG_NUMBERS``), or
-      2. a structured ``CIP-<vendor>-<type>-<code>`` placeholder.
+      1. ``table[(vendor, product_type, product_code, major_rev)]``, if
+         ``major_rev`` is given and that revision-specific key is present;
+      2. ``table[(vendor, product_type, product_code)]``;
+      3. a structured ``CIP-<vendor>-<type>-<code>`` placeholder.
+
+    ``major_rev`` disambiguates the hardware "series" letter (``/A``,
+    ``/B``, ...): the CIP identity triple alone does not encode it -- a new
+    series does not get a new product code, it gets a new firmware-major-
+    revision breakpoint instead, and that breakpoint differs per catalog
+    family (verified against Rockwell's own Logix Designer catalog data: for
+    example 5069-OB16 is ``/A`` at major revision 1-2 and ``/B`` from 3
+    onward, while 1734-IB8S switches to ``/B`` at revision 2). Passing
+    ``major_rev`` lets a richer table (see below) resolve the exact series;
+    omitting it (the default) resolves to the base catalog number, which is
+    always correct, just not series-specific.
 
     To use a richer/shared catalog (Rockwell's own data, or the module
     templates aei-logix5000 extracts), load it with
@@ -211,6 +240,10 @@ def catalog_number_for_identity(
         )
         table = merge_catalog(None, load_external_catalog("shared_catalog.json"))
         number = catalog_number_for_identity((1, 14, 216), table=table)
+        # or, with the revision-aware entries mined from Logix Designer's
+        # own catalog data (see resources/external_catalog.rockwell_logix_designer.json):
+        number = catalog_number_for_identity((1, 7, 392), table=table, major_rev=3)
+        # -> "5069-OB16/B"
 
     A zero identity ``(0, 0, 0)`` means the module record did not carry a
     CIP identity at all (e.g. an unparseable record); for that case an empty
@@ -226,6 +259,10 @@ def catalog_number_for_identity(
         table = CATALOG_NUMBERS
     if identity == (0, 0, 0):
         return ""
+    if major_rev is not None:
+        revision_key = identity + (major_rev,)
+        if revision_key in table:
+            return table[revision_key]
     if identity in table:
         return table[identity]
     return _fallback_catalog_number(identity)

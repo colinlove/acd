@@ -24,6 +24,34 @@ def test_load_colon_key_form(tmp_path):
     assert cat == {(1, 12, 166): "1756-EN2T", (1, 99, 4242): "MY-MOD"}
 
 
+def test_load_colon_key_form_with_major_rev(tmp_path):
+    # A 4th colon component is the module's firmware major revision, for
+    # entries that disambiguate a hardware series letter (e.g. 5069-OB16/A
+    # vs /B) that the (vendor, product_type, product_code) triple alone
+    # cannot express.
+    p = tmp_path / "cat.json"
+    p.write_text(
+        json.dumps({"1:7:392": "5069-OB16", "1:7:392:3": "5069-OB16/B"}),
+        encoding="utf-8",
+    )
+    cat = load_external_catalog(str(p))
+    assert cat == {(1, 7, 392): "5069-OB16", (1, 7, 392, 3): "5069-OB16/B"}
+
+
+def test_load_array_key_form_with_major_rev(tmp_path):
+    p = tmp_path / "cat.json"
+    p.write_text(json.dumps({"entries": {"1:7:392:3": "5069-OB16/B"}}), encoding="utf-8")
+    cat = load_external_catalog(str(p))
+    assert cat == {(1, 7, 392, 3): "5069-OB16/B"}
+
+
+def test_load_rejects_five_part_key(tmp_path):
+    p = tmp_path / "cat.json"
+    p.write_text(json.dumps({"1:7:392:3:9": "too many parts"}), encoding="utf-8")
+    with pytest.raises(CatalogError):
+        load_external_catalog(str(p))
+
+
 def test_load_array_key_form(tmp_path):
     p = tmp_path / "cat.json"
     # Array keys are accepted too.
@@ -101,6 +129,27 @@ def test_bundled_example_file_loads():
     # It carries the two verifiable entries from the bundled L5X samples.
     assert cat.get((1, 12, 166)) == "1756-EN2T"
     assert cat.get((1, 14, 168)) == "1756-L85E"
+
+
+def test_bundled_rockwell_logix_designer_catalog_loads():
+    # The Rockwell-catalog-mined resource file must itself be valid and
+    # loadable, and must resolve our worked 5069-OB16 series-collision
+    # example (see resources/external_catalog.rockwell_logix_designer.json's
+    # own _comment for provenance: mined from a locally-installed Logix
+    # Designer's own Module Profiles + legacy ENU/v20/Bin catalog data).
+    import os
+    path = os.path.join("..", "resources", "external_catalog.rockwell_logix_designer.json")
+    if not os.path.exists(path):
+        pytest.skip("Rockwell catalog resource file not present in this checkout")
+    cat = load_external_catalog(path)
+    assert len(cat) > 1000
+    table = merge_catalog(CATALOG_NUMBERS, cat)
+    # Base identity (no major_rev): resolves to the bare catalog number.
+    assert catalog_number_for_identity((1, 7, 392), table=table) == "5069-OB16"
+    # With major_rev: resolves to the exact series letter.
+    assert catalog_number_for_identity((1, 7, 392), table=table, major_rev=1) == "5069-OB16/A"
+    assert catalog_number_for_identity((1, 7, 392), table=table, major_rev=2) == "5069-OB16/A"
+    assert catalog_number_for_identity((1, 7, 392), table=table, major_rev=3) == "5069-OB16/B"
 
 
 def test_full_load_and_resolve_flow(tmp_path):

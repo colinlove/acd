@@ -64,6 +64,40 @@ def test_fallback_is_deterministic():
     assert catalog_number_for_identity((1, 99, 4242)) == catalog_number_for_identity((1, 99, 4242))
 
 
+def test_major_rev_resolves_revision_specific_entry():
+    # A table with both a base (3-tuple) and a revision-specific (4-tuple)
+    # entry for the same identity: passing major_rev must prefer the
+    # revision-specific one over the base.
+    table = {
+        (1, 7, 392): "5069-OB16",
+        (1, 7, 392, 1): "5069-OB16/A",
+        (1, 7, 392, 2): "5069-OB16/A",
+        (1, 7, 392, 3): "5069-OB16/B",
+    }
+    assert catalog_number_for_identity((1, 7, 392), table=table) == "5069-OB16"
+    assert catalog_number_for_identity((1, 7, 392), table=table, major_rev=1) == "5069-OB16/A"
+    assert catalog_number_for_identity((1, 7, 392), table=table, major_rev=3) == "5069-OB16/B"
+
+
+def test_major_rev_falls_back_to_base_when_revision_unknown():
+    # A major_rev not present in the table (e.g. a newer firmware revision
+    # released after the table was captured) falls back to the base 3-tuple
+    # entry rather than the CIP-... placeholder.
+    table = {(1, 7, 392): "5069-OB16", (1, 7, 392, 3): "5069-OB16/B"}
+    assert catalog_number_for_identity((1, 7, 392), table=table, major_rev=99) == "5069-OB16"
+
+
+def test_major_rev_with_no_table_entries_at_all_still_falls_back_to_cip():
+    # Neither the revision-specific nor the base identity is known: the
+    # structured placeholder still applies, exactly as without major_rev.
+    assert catalog_number_for_identity((1, 99, 4242), major_rev=3) == "CIP-1-99-4242"
+
+
+def test_zero_identity_returns_empty_even_with_major_rev():
+    # major_rev must not change the "no identity at all" behaviour.
+    assert catalog_number_for_identity((0, 0, 0), major_rev=3) == ""
+
+
 def test_builtin_table_invariants():
     # Regression guard on the built-in CATALOG_NUMBERS: lock its shape so a
     # future edit that accidentally drops, corrupts, or mis-types an entry is
