@@ -26,10 +26,16 @@ class SbRegionRecord:
             # Rockwell keeps the same SbRegion.Dat record shape but the payload is
             # opaque (Studio 5000 itself cannot show this content either; the L5X
             # export represents the whole AOI as a single <EncodedData> blob instead
-            # of per-rung text). Skip it rather than crash the whole file's parse.
+            # of per-rung text). Some ciphertext happens to be valid UTF-16 (no
+            # UnicodeDecodeError) but decodes to non-ASCII noise -- tag/instruction
+            # syntax is always ASCII, so reject that too rather than emit fabricated
+            # "logic" that was actually still-encrypted bytes. Skip it either way
+            # rather than crash the whole file's parse.
             try:
                 text = r.record_buffer.decode("utf-16-le").rstrip("\x00")
             except UnicodeDecodeError:
+                return
+            if not text.isascii():
                 return
             self.text = self.replace_tag_references(text)
             self._cur.execute("INSERT INTO rungs VALUES (?, ?, ?)", (r.header.identifier, self.text, ""))
@@ -59,10 +65,14 @@ class SbRegionRecord:
         if r.header.language_type not in ("Rung NT", "REGION NT"):
             return None
         # See the matching comment in __post_init__: a source-protected AOI's
-        # rungs are opaque ciphertext here, not UTF-16 text. Skip them.
+        # rungs are opaque ciphertext here, not UTF-16 text -- and some of that
+        # ciphertext is coincidentally valid (non-ASCII) UTF-16, so reject that
+        # too rather than emit fabricated "logic".
         try:
             text = r.record_buffer.decode("utf-16-le").rstrip("\x00")
         except UnicodeDecodeError:
+            return None
+        if not text.isascii():
             return None
         for tag in re.findall("@[A-Za-z0-9]*@", text):
             tag_id = int(tag[1:-1], 16)
