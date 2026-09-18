@@ -21,7 +21,16 @@ class SbRegionRecord:
             return
 
         if r.header.language_type == "Rung NT" or r.header.language_type == "REGION NT":
-            text = r.record_buffer.decode("utf-16-le").rstrip("\x00")
+            # A rung that belongs to a source-protected ("encoded") AddOnInstruction
+            # routine is stored here as its raw ciphertext, not UTF-16 ladder text --
+            # Rockwell keeps the same SbRegion.Dat record shape but the payload is
+            # opaque (Studio 5000 itself cannot show this content either; the L5X
+            # export represents the whole AOI as a single <EncodedData> blob instead
+            # of per-rung text). Skip it rather than crash the whole file's parse.
+            try:
+                text = r.record_buffer.decode("utf-16-le").rstrip("\x00")
+            except UnicodeDecodeError:
+                return
             self.text = self.replace_tag_references(text)
             self._cur.execute("INSERT INTO rungs VALUES (?, ?, ?)", (r.header.identifier, self.text, ""))
         elif r.header.language_type == "REGION AST":
@@ -49,7 +58,12 @@ class SbRegionRecord:
         r = FafaSbregions.from_bytes(dat_record.record.record_buffer)
         if r.header.language_type not in ("Rung NT", "REGION NT"):
             return None
-        text = r.record_buffer.decode("utf-16-le").rstrip("\x00")
+        # See the matching comment in __post_init__: a source-protected AOI's
+        # rungs are opaque ciphertext here, not UTF-16 text. Skip them.
+        try:
+            text = r.record_buffer.decode("utf-16-le").rstrip("\x00")
+        except UnicodeDecodeError:
+            return None
         for tag in re.findall("@[A-Za-z0-9]*@", text):
             tag_id = int(tag[1:-1], 16)
             name = name_lookup.get(tag_id)

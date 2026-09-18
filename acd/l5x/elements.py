@@ -1319,11 +1319,17 @@ class DataTypeBuilder(L5xElementBuilder):
                 extended_record.value
             )
 
-        string_family_int = struct.unpack("<I", extended_records[0x6C])[0]
+        # 0x6C/0x67/0x69 are normally always present, but a data type nested
+        # inside a source-protected ("encoded") AddOnInstruction can be missing
+        # them -- Rockwell withholds some of a protected AOI's own metadata
+        # alongside its encrypted logic. Default to "not a string family" /
+        # "not built-in" / "not module-defined" rather than crash the whole
+        # file's parse over one type record we can't fully introspect.
+        string_family_int = struct.unpack("<I", extended_records.get(0x6C, b"\x00\x00\x00\x00"))[0]
         string_family = "StringFamily" if string_family_int == 1 else "NoFamily"
 
-        built_in = struct.unpack("<I", extended_records[0x67])[0]
-        module_defined = struct.unpack("<I", extended_records[0x69])[0]
+        built_in = struct.unpack("<I", extended_records.get(0x67, b"\x00\x00\x00\x00"))[0]
+        module_defined = struct.unpack("<I", extended_records.get(0x69, b"\x00\x00\x00\x00"))[0]
 
         class_type = "User"
         if module_defined > 0:
