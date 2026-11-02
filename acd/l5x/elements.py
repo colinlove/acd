@@ -2725,6 +2725,33 @@ def _program_schedule_id(record: bytes) -> int:
     return parsed.comment_id
 
 
+def _task_settings_attribute(record: bytes) -> Union[bytes, None]:
+    """Value of attribute 0x01 of a current-layout task record, or None.
+
+    Attributes follow the 82-byte header as (u32 id, u32 length, value). The
+    record can lack the last four bytes of its final attribute (they lie past
+    the stored length); the task settings sit well before them, so a final
+    value up to four bytes short is returned as far as it goes.
+    """
+    if len(record) < 82:
+        return None
+    stored_length, count = struct.unpack_from("<II", record, 74)
+    if stored_length not in (len(record) - 74, len(record) - 78):
+        return None
+    pos = 82
+    for index in range(count):
+        if pos + 8 > len(record):
+            return None
+        attribute_id, length = struct.unpack_from("<II", record, pos)
+        end = pos + 8 + length
+        if end > len(record) and (index != count - 1 or end - len(record) > 4):
+            return None
+        if attribute_id == 0x01:
+            return bytes(record[pos + 8 : end])
+        pos = end
+    return None
+
+
 @dataclass
 class TaskBuilder(L5xElementBuilder):
     def build(self, comment_id_to_program: Dict[int, str]) -> Task:
@@ -2734,9 +2761,20 @@ class TaskBuilder(L5xElementBuilder):
         row = self._cur.fetchone()
         name, record = row[0], row[1]
 
-        # All task config fields live within ext[0x01], accessed via absolute BLOB offsets.
-        # These offsets were reverse-engineered from CIPDemo_RevEng.ACD.
-        if len(record) > 0x112E:
+        # All task config fields live within ext[0x01]; offsets below are
+        # relative to that attribute's value (reverse-engineered from
+        # CIPDemo_RevEng.ACD, where it starts at record offset 0x5A). Other
+        # attributes may precede it, so it is located by id, not position.
+        task_attribute = _task_settings_attribute(record) if len(record) > 0x112E else None
+        if task_attribute is not None and len(task_attribute) > 0x10D4:
+            task_data = task_attribute
+            rate_offset = 0x1012
+            type_offset = 0x109C
+            priority_offset = 0x109E
+            watchdog_offset = 0x10B0
+            disable_update = task_attribute[0x10D4]
+            program_offset = 0
+        elif len(record) > 0x112E:
             task_data = record
             rate_offset = 0x106C
             type_offset = 0x10F6
@@ -2768,7 +2806,7 @@ class TaskBuilder(L5xElementBuilder):
         task_type = _TASK_TYPE_MAP.get(type_val, "PERIODIC")
         rate_str = str(rate_us // 1000) if task_type != "CONTINUOUS" else None
 
-        # Scheduled programs: ext[0x01] value starts at BLOB offset 0x5A.
+        # Scheduled programs: at the start of the ext[0x01] value.
         # Format: u16 count followed by N u32 comment_ids.
         prog_count = struct.unpack_from("<H", task_data, program_offset)[0]
         max_program_count = (rate_offset - program_offset - 2) // 4

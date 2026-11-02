@@ -479,3 +479,40 @@ def test_legacy_task_rejects_excess_program_count():
             TaskBuilder(cursor, 100).build({})
     finally:
         database.close()
+
+
+def _current_task_record(task_settings_first: bool, cut_short: bool) -> bytes:
+    # A current-layout task record whose attribute 0x01 holds the settings:
+    # the program list at 0, rate at 0x1012, type and priority at 0x109C,
+    # watchdog at 0x10B0 and disable-update-outputs at 0x10D4.
+    settings = bytearray(0x1114)
+    struct.pack_into("<HI", settings, 0, 1, 0x2420)
+    struct.pack_into("<I", settings, 0x1012, 20_000)
+    struct.pack_into("<HH", settings, 0x109C, 2, 7)
+    struct.pack_into("<I", settings, 0x10B0, 300_000)
+    settings[0x10D4] = 1
+    small = [(attribute_id, struct.pack("<I", 0)) for attribute_id in (0x65, 0x66, 0x68, 0x67)]
+    ordered = [(0x01, bytes(settings))] + small if task_settings_first else small + [(0x01, bytes(settings))]
+    attributes = b"".join(struct.pack("<II", i, len(v)) + v for i, v in ordered)
+    head = struct.pack("<IIHHH", 0, 0, 0, 0x70, 0) + bytes(60)
+    # The stored length leaves out the record's last four bytes.
+    record = head + struct.pack("<II", len(attributes) + 4, len(ordered)) + attributes
+    return record[:-4] if cut_short else record
+
+
+@pytest.mark.parametrize("task_settings_first", [True, False])
+@pytest.mark.parametrize("cut_short", [True, False])
+def test_task_settings_are_found_by_attribute_id(task_settings_first, cut_short):
+    database, cursor = _database()
+    try:
+        _insert(cursor, 100, "MainTask", _current_task_record(task_settings_first, cut_short))
+        task = TaskBuilder(cursor, 100).build({0x2420: "MainProgram"})
+
+        assert task.type == "PERIODIC"
+        assert task.rate == "20"
+        assert task.priority == "7"
+        assert task.watchdog == "300"
+        assert task.disable_update_outputs == "true"
+        assert [program.name for program in task.scheduled_programs] == ["MainProgram"]
+    finally:
+        database.close()
