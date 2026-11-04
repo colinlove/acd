@@ -2,6 +2,7 @@ import sqlite3
 import struct
 
 import pytest
+from loguru import logger as log
 
 from acd.l5x.elements import TagBuilder, TaskBuilder, _program_schedule_id
 from acd.record.rx import LegacyRxGeneric, RxGeneric
@@ -465,17 +466,80 @@ def test_legacy_program_schedule_id_and_task():
         database.close()
 
 
-def test_legacy_task_rejects_excess_program_count():
+@pytest.mark.parametrize("program_count", [128, 129])
+def test_legacy_task_program_count_limit(program_count):
+    # The program list (u16 count, then u32 ids) ends where the rate starts,
+    # at offset 514, so it holds at most 128 ids. A 129th id would be the rate
+    # itself. Every slot, and the rate, is a known program id here, so a count
+    # past the limit would surface as phantom programs if it were trusted.
+    rate_us = 10_000
+    programs = {1000 + i: "Program%d" % i for i in range(128)}
+    programs[rate_us] = "Phantom"
     task_data = bytearray(806)
-    struct.pack_into("<H", task_data, 0, 129)
-    task_record = _legacy_rx(
-        cip_type=0x70,
-        attributes=[(0x01, bytes(task_data))],
-    )
+    struct.pack_into("<H", task_data, 0, program_count)
+    struct.pack_into("<128I", task_data, 2, *range(1000, 1128))
+    struct.pack_into("<I", task_data, 514, rate_us)
+    struct.pack_into("<H", task_data, 652, 2)
+    struct.pack_into("<H", task_data, 654, 5)
+    struct.pack_into("<I", task_data, 802, 500_000)
+    task_record = _legacy_rx(cip_type=0x70, attributes=[(0x01, bytes(task_data))])
+
+    warnings = []
+    sink = log.add(warnings.append, level="WARNING", format="{message}")
     database, cursor = _database()
     try:
         _insert(cursor, 100, "MainTask", task_record)
-        with pytest.raises(ValueError, match="too many scheduled programs"):
-            TaskBuilder(cursor, 100).build({})
+        task = TaskBuilder(cursor, 100).build(programs)
+    finally:
+        database.close()
+        log.remove(sink)
+
+    # The task and its settings survive either way.
+    assert (task.name, task.type, task.rate, task.priority, task.watchdog) == (
+        "MainTask", "PERIODIC", "10", "5", "500",
+    )
+    scheduled = [program.name for program in task.scheduled_programs]
+    if program_count == 128:
+        assert scheduled == ["Program%d" % i for i in range(128)]
+        assert warnings == []
+    else:
+        assert scheduled == []
+        assert len(warnings) == 1
+        assert "MainTask" in warnings[0] and "129" in warnings[0]
+
+
+def _current_task_record(task_settings_first: bool, cut_short: bool) -> bytes:
+    # A current-layout task record whose attribute 0x01 holds the settings:
+    # the program list at 0, rate at 0x1012, type and priority at 0x109C,
+    # watchdog at 0x10B0 and disable-update-outputs at 0x10D4.
+    settings = bytearray(0x1114)
+    struct.pack_into("<HI", settings, 0, 1, 0x2420)
+    struct.pack_into("<I", settings, 0x1012, 20_000)
+    struct.pack_into("<HH", settings, 0x109C, 2, 7)
+    struct.pack_into("<I", settings, 0x10B0, 300_000)
+    settings[0x10D4] = 1
+    small = [(attribute_id, struct.pack("<I", 0)) for attribute_id in (0x65, 0x66, 0x68, 0x67)]
+    ordered = [(0x01, bytes(settings))] + small if task_settings_first else small + [(0x01, bytes(settings))]
+    attributes = b"".join(struct.pack("<II", i, len(v)) + v for i, v in ordered)
+    head = struct.pack("<IIHHH", 0, 0, 0, 0x70, 0) + bytes(60)
+    # The stored length leaves out the record's last four bytes.
+    record = head + struct.pack("<II", len(attributes) + 4, len(ordered)) + attributes
+    return record[:-4] if cut_short else record
+
+
+@pytest.mark.parametrize("task_settings_first", [True, False])
+@pytest.mark.parametrize("cut_short", [True, False])
+def test_task_settings_are_found_by_attribute_id(task_settings_first, cut_short):
+    database, cursor = _database()
+    try:
+        _insert(cursor, 100, "MainTask", _current_task_record(task_settings_first, cut_short))
+        task = TaskBuilder(cursor, 100).build({0x2420: "MainProgram"})
+
+        assert task.type == "PERIODIC"
+        assert task.rate == "20"
+        assert task.priority == "7"
+        assert task.watchdog == "300"
+        assert task.disable_update_outputs == "true"
+        assert [program.name for program in task.scheduled_programs] == ["MainProgram"]
     finally:
         database.close()
